@@ -121,7 +121,7 @@ proc getReadNames*(fieldName: string, options: FieldMapping, default: seq[NamePa
     if name notin result: result.add name
 
 proc hasDumpName*(options: FieldMapping): bool =
-  options.dumpName.kind == NoName
+  options.dumpName.kind != NoName
 
 proc getDumpName*(fieldName: string, options: FieldMapping, default: NamePattern): string =
   ## gives the name to dump this field in json by
