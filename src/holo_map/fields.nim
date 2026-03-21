@@ -185,7 +185,7 @@ proc getMappingGroupFromNode(node: NimNode): MappingGroup =
 proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
   var names: seq[(string, NimNode)] = @[]
   var t = obj
-  var isTuple = false
+  var supportsCustomPragma = false
   while t != nil:
     # very horribly try to copy macros.customPragma:
     var impl = getTypeInst(t)
@@ -205,10 +205,14 @@ proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
         break
     case impl.kind
     of nnkTupleTy:
+      supportsCustomPragma = false
       iterFieldNames(names, impl)
       t = nil
-      isTuple = true
+    #of nnkEnumTy:
+    #  supportsCustomPragma = false
+    #  t = nil
     of nnkObjectTy:
+      supportsCustomPragma = true
       iterFieldNames(names, impl[^1])
       t = nil
       if impl[1].kind != nnkEmpty:
@@ -220,7 +224,7 @@ proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
   for name, prag in names.items:
     var val: NimNode = nil
     var lastFilter = AnyMappingGroup
-    if prag != nil and not isTuple:
+    if prag != nil and supportsCustomPragma:
       # again copied from macros.customPragma
       for p in prag:
         if p.kind in nnkPragmaCallKinds and p.len > 0 and p[0].kind == nnkSym and matchCustomPragma(p[0]):
@@ -260,22 +264,40 @@ proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
             toFieldMapping(getCustomPragmaVal(`obj`.`ident`, `pragmaSym`))
           else:
             FieldMapping()
+  result = newCall(bindSym"@", result)
 
-macro fieldMappingPairs*[T: object | ref object | tuple](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
+type
+  FieldedType* = (object | ref object | tuple)
+    # XXX also maybe enum
+  FieldMappingPairs* = seq[(string, FieldMapping)]
+
+macro defaultFieldMappingPairs*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
   result = buildFieldMappingPairs(obj, group)
 
-macro fieldMappingPairs*[T: object | ref object | tuple](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): untyped =
-  result = buildFieldMappingPairs(obj, group)
+template fieldMappingPairs*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
+  # XXX check if overloadable, so that types can define their own mappings?
+  defaultFieldMappingPairs(obj, group)
 
-template fieldMappingTable*[T: object | ref object | tuple](obj: T, group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
+type HasFieldMappings* = concept
+  proc fieldMappingPairs(obj: typedesc[Self], group: static MappingGroup): FieldMappingPairs
+
+template fieldMappingTable*[T: HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
   mixin fieldMappingPairs
   toTable fieldMappingPairs(obj, group)
 
-template fieldMappingTable*[T: object | ref object | tuple](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
-  mixin fieldMappingPairs
-  toTable fieldMappingPairs(obj, group)
+when false: # runtime overloadable?
+  macro fieldMappingPairs*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
+    result = buildFieldMappingPairs(obj, group)
 
-# XXX types could also define hooks for these too
-# where to put the hook definition though, this module imports common
+  template fieldMappingTable*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
+    mixin fieldMappingPairs
+    toTable fieldMappingPairs(obj, group)
+else:
+  template defaultFieldMappingPairs*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
+    defaultFieldMappingPairs(T, group)
 
-# XXX consider adapting enum fields
+  template fieldMappingPairs*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
+    fieldMappingPairs(T, group)
+
+  template fieldMappingTable*[T: HasFieldMappings](obj: T, group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
+    fieldMappingTable(T, group)
