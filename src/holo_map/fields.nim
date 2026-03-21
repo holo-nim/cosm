@@ -58,14 +58,6 @@ template mapping*(group: static MappingGroup, options: FieldMappingArg) {.pragma
   ## convenience wrapper that calls `toFieldMapping` on the given argument
   ## filtered to formats encompassed by the given mapping group
 
-when false:
-  template mapping*(name: string) {.pragma.}
-    ## sets a single name between json serialization/deserialization for a field,
-    ## can be fine tuned by giving a custom options object
-  template mapping*(enabled: bool) {.pragma.}
-    ## whether or not to enable this field for both json serialization and deserialization,
-    ## can be fine tuned by giving a custom options object
-
 proc toName*(str: string): NamePattern =
   ## creates a name pattern that uses a specific string instead of the field name
   NamePattern(kind: NameString, str: str)
@@ -124,24 +116,12 @@ proc getReadNames*(fieldName: string, options: FieldMapping, default: seq[NamePa
   for pat in names:
     let name = apply(pat, fieldName)
     if name notin result: result.add name
-  when false:
-    if jsonyFieldCompatibility:
-      result = @[fieldName]
-      let snakeCase = snakeCaseDynamic(fieldName)
-      if snakeCase != fieldName: result.add snakeCase
-    else:
-      result = @[snakeCaseDynamic(fieldName)]
 
 proc getDumpName*(fieldName: string, options: FieldMapping, default: NamePattern): string =
   ## gives the name to dump this field in json by
   ## if not given, this defaults to the original field name
   let name = if options.dumpName.kind != NoName: options.dumpName else: default
   result = apply(name, fieldName)
-  when false:
-    if jsonyFieldCompatibility:
-      result = fieldName
-    else:
-      result = snakeCaseDynamic(fieldName)
 
 proc realBasename(n: NimNode): string =
   var n = n
@@ -196,8 +176,11 @@ proc getMappingGroupFromNode(node: NimNode): MappingGroup =
   if node.kind in {nnkStrLit..nnkTripleStrLit, nnkIdent, nnkAccQuoted, nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
     result = MappingGroup($node)
   else:
-    # no idea if this even works
-    result = cast[MappingGroup](node)
+    when false:
+      # as expected does not work lol
+      result = cast[MappingGroup](node)
+    else:
+      error("invalid node for mapping group constant: " & treeRepr(node), node)
 
 proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
   var names: seq[(string, NimNode)] = @[]
@@ -242,8 +225,8 @@ proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
       for p in prag:
         if p.kind in nnkPragmaCallKinds and p.len > 0 and p[0].kind == nnkSym and matchCustomPragma(p[0]):
           let def = p[0].getImpl[3]
-          let arg = if def.len == 3: def[2] else: def[1] 
-          let filter = if def.len == 3: getMappingGroupFromNode(def[1]) else: AnyMappingGroup
+          let arg = if def.len == 3: p[2] else: p[1] 
+          let filter = if def.len == 3: getMappingGroupFromNode(p[1]) else: AnyMappingGroup
           if group <= filter and filter <= lastFilter:
             val = arg
             lastFilter = filter
