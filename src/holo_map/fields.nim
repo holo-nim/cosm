@@ -135,6 +135,13 @@ proc realBasename(n: NimNode): string =
   if n.kind == nnkPostfix: n = n[^1]
   result = $n
 
+type
+  FieldedType* = (object | ref object | tuple)
+    # XXX also maybe enum
+  FieldMappingPairs* = seq[(string, FieldMapping)]
+  HasFieldMappings* = concept
+    proc fieldMappings(obj: typedesc[Self], group: static MappingGroup): FieldMappingPairs
+
 proc iterFieldNames(names: var seq[(string, NimNode)], list: NimNode) =
   case list.kind
   of nnkRecList, nnkTupleTy:
@@ -272,39 +279,31 @@ proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
             FieldMapping()
   result = newCall(bindSym"@", result)
 
-type
-  FieldedType* = (object | ref object | tuple)
-    # XXX also maybe enum
-  FieldMappingPairs* = seq[(string, FieldMapping)]
-
-macro defaultFieldMappingPairs*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
+macro defaultFieldMappings*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
   result = buildFieldMappingPairs(obj, group)
 
-template fieldMappingPairs*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
-  # XXX check if overloadable, so that types can define their own mappings?
-  defaultFieldMappingPairs(obj, group)
-
-type HasFieldMappings* = concept
-  proc fieldMappingPairs(obj: typedesc[Self], group: static MappingGroup): FieldMappingPairs
+template fieldMappings*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
+  ## overloadable, so that types can define their own mappings
+  defaultFieldMappings(obj, group)
 
 template fieldMappingTable*[T: HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
-  mixin fieldMappingPairs
-  toTable fieldMappingPairs(obj, group)
+  mixin fieldMappings
+  toTable fieldMappings(obj, group)
 
 when false: # runtime overloadable?
-  macro fieldMappingPairs*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
+  macro fieldMappings*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
     result = buildFieldMappingPairs(obj, group)
 
   template fieldMappingTable*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
-    mixin fieldMappingPairs
-    toTable fieldMappingPairs(obj, group)
+    mixin fieldMappings
+    toTable fieldMappings(obj, group)
 else:
-  template defaultFieldMappingPairs*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
-    defaultFieldMappingPairs(T, group)
+  template defaultFieldMappings*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
+    defaultFieldMappings(T, group)
 
-  template fieldMappingPairs*[T: HasFieldMappings](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
-    mixin fieldMappingPairs
-    fieldMappingPairs(T, group)
+  template fieldMappings*[T: HasFieldMappings](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
+    mixin fieldMappings
+    fieldMappings(T, group)
 
   template fieldMappingTable*[T: HasFieldMappings](obj: T, group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
     mixin fieldMappingTable
