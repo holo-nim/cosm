@@ -309,7 +309,45 @@ else:
     mixin fieldMappingTable
     fieldMappingTable(T, group)
 
+macro mapFieldInput*[T: FieldedType](
+    v: T, key: string,
+    # type of v not used yet but maybe in the future to manually complete `fields` XXX #5
+    fields: static openArray[(string, FieldMapping)],
+    defaultInputs: static seq[NamePattern],
+    templToCall, elseBody: untyped): untyped =
+  ## calls `templToCall` with the address of the mapped field of `v`
+  result = newNimNode(nnkCaseStmt, key)
+  result.add key
+  for fieldName, options in fields.items:
+    if not options.ignoreInput:
+      var branch = newTree(nnkOfBranch)
+      let inputNames = getInputNames(fieldName, options, defaultInputs)
+      for name in inputNames:
+        branch.add newLit(name)
+      branch.add newCall(templToCall, newDotExpr(copy v, ident fieldName))
+      #branch.add crudeReplaceIdent(body, "field", newDotExpr(copy v, ident fieldName))
+      result.add branch
+  if result.len == 1:
+    result = newTree(nnkDiscardStmt, newEmptyNode())
+  else:
+    result.add newTree(nnkElse, elseBody)
+
+template mapFieldOutput*[T: FieldedType](
+    v: T,
+    fields: static openArray[(string, FieldMapping)],
+    defaultOutput: static NamePattern,
+    templToCall: untyped): untyped =
+  ## calls `templToCall` with: 1. the mapped field address from `v`, 2. the mapped field name
+  const fieldTable = toTable fields
+  for k, e in v.fieldPairs:
+    const options = fieldTable.getOrDefault(k)
+    when not options.ignoreOutput:
+      const outputName = getOutputName(k, options, defaultOutput)
+      templToCall(e, outputName)
+
 macro mapEnumFieldInput*[T: enum](t: typedesc[T], s: string, mappings: static FieldMappingPairs, templToCall: untyped) =
+  ## calls `templToCall` with the mapped enum field from `s`
+  # XXX missing default arg because of enum string value #6
   var impl = getTypeInst(t)
   while true:
     if impl.kind in {nnkRefTy, nnkPtrTy, nnkVarTy, nnkOutTy}:
@@ -370,6 +408,8 @@ macro mapEnumFieldInput*[T: enum](t: typedesc[T], s: string, mappings: static Fi
     result.add branch
 
 macro mapEnumFieldOutput*[T: enum](t: typedesc[T], v: T, mappings: static FieldMappingPairs, templToCall: untyped) =
+  ## calls `templToCall` with the mapped field name of `v`
+  # XXX missing default arg because of enum string value #6
   var impl = getTypeInst(v)
   while true:
     if impl.kind in {nnkRefTy, nnkPtrTy, nnkVarTy, nnkOutTy}:
