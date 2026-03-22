@@ -109,15 +109,15 @@ proc buildVariants*(obj: NimNode): ObjectVariantInfos =
   var t = obj
   while t != nil:
     # very horribly try to copy macros.customPragma:
-    var impl = getTypeInst(t)
+    var impl = getTypeImpl(t)
     while true:
       if impl.kind in {nnkRefTy, nnkPtrTy, nnkVarTy, nnkOutTy}:
         if impl[^1].kind == nnkObjectTy:
           impl = impl[^1]
         else:
-          impl = getTypeInst(impl[^1])
+          impl = getTypeImpl(impl[^1])
       elif impl.kind == nnkBracketExpr and impl[0].eqIdent"typeDesc":
-        impl = getTypeInst(impl[1])
+        impl = getTypeImpl(impl[1])
       elif impl.kind == nnkBracketExpr and impl[0].kind == nnkSym:
         impl = getImpl(impl[0])[^1]
       elif impl.kind == nnkSym:
