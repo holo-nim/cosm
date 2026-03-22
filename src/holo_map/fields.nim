@@ -308,3 +308,120 @@ else:
   template fieldMappingTable*[T: HasFieldMappings](obj: T, group: static MappingGroup = AnyMappingGroup): Table[string, FieldMapping] =
     mixin fieldMappingTable
     fieldMappingTable(T, group)
+
+macro mapEnumFieldInput*[T: enum](t: typedesc[T], s: string, mappings: static FieldMappingPairs, templToCall: untyped) =
+  var impl = getTypeInst(t)
+  while true:
+    if impl.kind in {nnkRefTy, nnkPtrTy, nnkVarTy, nnkOutTy}:
+      if impl[^1].kind == nnkObjectTy:
+        impl = impl[^1]
+      else:
+        impl = getTypeInst(impl[^1])
+    elif impl.kind == nnkBracketExpr and impl[0].eqIdent"typeDesc":
+      impl = getTypeInst(impl[1])
+    elif impl.kind == nnkBracketExpr and impl[0].kind == nnkSym:
+      impl = getImpl(impl[0])[^1]
+    elif impl.kind == nnkSym:
+      impl = getImpl(impl)[^1]
+    else:
+      break
+  if impl.kind != nnkEnumTy:
+    error "expected enum type for type impl of " & repr(t), impl
+  let mappingTable = toTable(mappings)
+  result = newNimNode(nnkCaseStmt, s)
+  result.add s
+  for f in impl:
+    # copied from std/enumutils.genEnumCaseStmt
+    var fieldSym: NimNode = nil
+    var fieldStrNodes: seq[NimNode] = @[]
+    case f.kind
+    of nnkEmpty: continue # skip first node of `enumTy`
+    of nnkSym, nnkIdent, nnkAccQuoted, nnkOpenSymChoice, nnkClosedSymChoice:
+      fieldSym = f
+    of nnkEnumFieldDef:
+      fieldSym = f[0]
+      case f[1].kind
+      of nnkStrLit .. nnkTripleStrLit:
+        fieldStrNodes = @[f[1]]
+      of nnkTupleConstr:
+        fieldStrNodes = @[f[1][1]]
+      of nnkIntLit:
+        discard
+      else:
+        let fAst = f[0].getImpl
+        if fAst != nil:
+          case fAst.kind
+          of nnkStrLit .. nnkTripleStrLit:
+            fieldStrNodes = @[fAst]
+          of nnkTupleConstr:
+            fieldStrNodes = @[fAst[1]]
+          else: discard
+    else: error("Invalid node for enum type `" & $f.kind & "`!", f)
+    let fieldName = $fieldSym
+    let mapping = mappingTable.getOrDefault(fieldName, FieldMapping())
+    if hasInputNames(mapping):
+      for inputName in mapping.inputNames:
+        fieldStrNodes.add newLit apply(inputName, fieldName)
+    elif fieldStrNodes.len == 0:
+      fieldStrNodes = @[newLit fieldName]
+    var branch = newTree(nnkOfBranch)
+    branch.add fieldStrNodes
+    branch.add newCall(templToCall, newDotExpr(t, fieldSym))
+    result.add branch
+
+macro mapEnumFieldOutput*[T: enum](t: typedesc[T], v: T, mappings: static FieldMappingPairs, templToCall: untyped) =
+  var impl = getTypeInst(v)
+  while true:
+    if impl.kind in {nnkRefTy, nnkPtrTy, nnkVarTy, nnkOutTy}:
+      if impl[^1].kind == nnkObjectTy:
+        impl = impl[^1]
+      else:
+        impl = getTypeInst(impl[^1])
+    elif impl.kind == nnkBracketExpr and impl[0].eqIdent"typeDesc":
+      impl = getTypeInst(impl[1])
+    elif impl.kind == nnkBracketExpr and impl[0].kind == nnkSym:
+      impl = getImpl(impl[0])[^1]
+    elif impl.kind == nnkSym:
+      impl = getImpl(impl)[^1]
+    else:
+      break
+  if impl.kind != nnkEnumTy:
+    error "expected enum type for type impl of " & repr(t), impl
+  let mappingTable = toTable(mappings)
+  result = newNimNode(nnkCaseStmt, v)
+  result.add v
+  for f in impl:
+    # copied from std/enumutils.genEnumCaseStmt
+    var fieldSym, fieldStrNode: NimNode = nil
+    case f.kind
+    of nnkEmpty: continue # skip first node of `enumTy`
+    of nnkSym, nnkIdent, nnkAccQuoted, nnkOpenSymChoice, nnkClosedSymChoice:
+      fieldSym = f
+    of nnkEnumFieldDef:
+      fieldSym = f[0]
+      case f[1].kind
+      of nnkStrLit .. nnkTripleStrLit:
+        fieldStrNode = f[1]
+      of nnkTupleConstr:
+        fieldStrNode = f[1][1]
+      of nnkIntLit:
+        discard
+      else:
+        let fAst = f[0].getImpl
+        if fAst != nil:
+          case fAst.kind
+          of nnkStrLit .. nnkTripleStrLit:
+            fieldStrNode = fAst
+          of nnkTupleConstr:
+            fieldStrNode = fAst[1]
+          else: discard
+    else: error("Invalid node for enum type `" & $f.kind & "`!", f)
+    let fieldName = $fieldSym
+    let mapping = mappingTable.getOrDefault(fieldName, FieldMapping())
+    if hasOutputName(mapping):
+      fieldStrNode = newLit apply(mapping.outputName, fieldName)
+    elif fieldStrNode == nil or fieldStrNode.kind notin {nnkStrLit..nnkTripleStrLit}:
+      fieldStrNode = newLit fieldName
+    result.add newTree(nnkOfBranch,
+      newDotExpr(t, fieldSym),
+      newCall(templToCall, fieldStrNode))
