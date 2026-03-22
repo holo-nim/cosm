@@ -1,6 +1,6 @@
 ## utilities for mapping fields of types
 
-import std/[macros, tables], ./caseutils
+import std/[macros, tables], ./caseutils, private/macroutils
 
 type
   NamePatternKind* = enum
@@ -128,12 +128,6 @@ proc getOutputName*(fieldName: string, options: FieldMapping, default: NamePatte
   ## if not given, this defaults to the pattern in `default`
   let name = if hasOutputName(options): options.outputName else: default
   result = apply(name, fieldName)
-
-proc realBasename(n: NimNode): string =
-  var n = n
-  if n.kind == nnkPragmaExpr: n = n[0]
-  if n.kind == nnkPostfix: n = n[^1]
-  result = $n
 
 type
   FieldedType* = (object | ref object | tuple)
@@ -312,10 +306,12 @@ else:
 macro mapFieldInput*[T: FieldedType](
     v: T, key: string,
     # type of v not used yet but maybe in the future to manually complete `fields` XXX #5
-    fields: static openArray[(string, FieldMapping)],
+    fields: static FieldMappingPairs,
     defaultInputs: static seq[NamePattern],
     templToCall, elseBody: untyped): untyped =
   ## calls `templToCall` with the address of the mapped field of `v`
+  ##
+  ## warning: currently requires importing `std/importutils` and calling `privateAccess` on the object type to work with private fields
   result = newNimNode(nnkCaseStmt, key)
   result.add key
   for fieldName, options in fields.items:
@@ -332,9 +328,75 @@ macro mapFieldInput*[T: FieldedType](
   else:
     result.add newTree(nnkElse, elseBody)
 
+import ./variants
+
+macro mapInputVariantFieldName*[T: VariantType](
+    obj: typedesc[T], key: string,
+    fields: static FieldMappingPairs,
+    defaultInputs: static seq[NamePattern],
+    innerFieldTempl, variantFieldTempl, elseBody: untyped) =
+  ## finds the variant field name for `key` based on `variants`:
+  ## if `key` maps to a variant discriminator, calls `variantFieldTempl` with an identifier of the original field
+  ## if `key` maps to a field inside a variant branch, calls `innerFieldTempl` with:
+  ##   1. the original field identifier of `key`
+  ##   2. the original identifier of the variant field
+  ##   3. the first acceptable value of the variant field for the branch that the inner field is in
+  ## otherwise, emits `elseBody`
+  result = newNimNode(nnkCaseStmt, key)
+  result.add key
+  let variants = buildVariants(obj)
+  let mappingTable = toTable fields
+  if variants.variants.len == 0:
+    error("got no object variants", obj)
+  for variant in variants.variants:
+    block variantField:
+      let options = mappingTable.getOrDefault(variant.discrimName, FieldMapping())
+      if not options.ignoreInput:
+        var branch = newNimNode(nnkOfBranch, variantFieldTempl)
+        let inputNames = getInputNames(variant.discrimName, options, defaultInputs)
+        for name in inputNames:
+          branch.add newLit name
+        branch.add newCall(variantFieldTempl, ident variant.discrimName)
+        result.add branch
+    for fieldName, branchIndex in variant.fieldsToBranch:
+      let options = mappingTable.getOrDefault(fieldName, FieldMapping())
+      if not options.ignoreInput:
+        var branch = newNimNode(nnkOfBranch, variantFieldTempl)
+        let inputNames = getInputNames(fieldName, options, defaultInputs)
+        for name in inputNames:
+          branch.add newLit name
+        let discrimValue = firstValue(variant.branches[branchIndex])
+        branch.add newCall(innerFieldTempl,
+          ident fieldName,
+          ident variant.discrimName,
+          copy discrimValue)
+        result.add branch
+  if result.len == 1:
+    result = newTree(nnkDiscardStmt, newEmptyNode())
+  else:
+    result.add newTree(nnkElse, elseBody)
+
+template mapInputVariantField*[T: VariantType](
+    obj: T, key: string,
+    fields: static FieldMappingPairs,
+    defaultInputs: static seq[NamePattern],
+    innerFieldTempl, variantFieldTempl, elseBody: untyped) =
+  ## finds the variant for `key` in `obj`:
+  ## if `key` is a variant discriminator, calls `variantFieldTempl` with the address of `key` in `obj`
+  ## if `key` is a field inside a variant branch, calls `innerFieldTempl` with:
+  ##   1. the address of `key` in `obj`
+  ##   2. the address of the variant field
+  ##   3. the first acceptable value of the variant field for the branch that the inner field is in
+  ## otherwise, emits `elseBody`
+  template onInnerField(f, discrimName, discrimValue) =
+    `innerFieldTempl`(`obj`.`f`, `obj`.`discrimName`, `discrimValue`)
+  template onVariantField(f) =
+    `variantFieldTempl`(`obj`.`f`)
+  mapInputVariantFieldName(T, key, fields, defaultInputs, onInnerField, onVariantField, elseBody)
+
 template mapFieldOutput*[T: FieldedType](
     v: T,
-    fields: static openArray[(string, FieldMapping)],
+    fields: static FieldMappingPairs,
     defaultOutput: static NamePattern,
     templToCall: untyped): untyped =
   ## calls `templToCall` with: 1. the mapped field address from `v`, 2. the mapped field name
