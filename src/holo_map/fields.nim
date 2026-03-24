@@ -270,7 +270,7 @@ macro getDefaultFieldMappings*[T: FieldedType](obj: typedesc[T], group: static M
 
 template getFieldMappings*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
   ## overloadable, so that types can define their own mappings
-  defaultFieldgetDefaultFieldMappingsMappings(obj, group)
+  getDefaultFieldMappings(obj, group)
 
 when false: # runtime overloadable?
   macro getFieldMappings*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
