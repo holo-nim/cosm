@@ -136,6 +136,7 @@ type
     # XXX also maybe enum
   FieldMappingPairs* = seq[(string, FieldMapping)]
   HasFieldMappings* = concept
+    ## implement to override mappings for a type
     proc getFieldMappings(obj: typedesc[Self], group: static MappingGroup): FieldMappingPairs
 
 proc iterFieldNames(names: var seq[(string, NimNode)], list: NimNode) =
@@ -268,20 +269,16 @@ proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
 macro getDefaultFieldMappings*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
   result = buildFieldMappingPairs(obj, group)
 
-template getFieldMappings*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
-  ## overloadable, so that types can define their own mappings
-  getDefaultFieldMappings(obj, group)
+template getActualFieldMappings*[T: HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
+  mixin getFieldMappings
+  getFieldMappings(T, group)
 
-when false: # runtime overloadable?
-  macro getFieldMappings*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
-    result = buildFieldMappingPairs(obj, group)
-else:
-  template getDefaultFieldMappings*[T: FieldedType](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
-    getDefaultFieldMappings(T, group)
+template getActualFieldMappings*[U: HasFieldMappings, T: (ref U) and not HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
+  mixin getFieldMappings
+  getFieldMappings(U, group)
 
-  template getFieldMappings*[T: HasFieldMappings](obj: T, group: static MappingGroup = AnyMappingGroup): untyped =
-    mixin getFieldMappings
-    getFieldMappings(T, group)
+template getActualFieldMappings*[T: FieldedType and not HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
+  getDefaultFieldMappings(T, group)
 
 proc toUnique[T](x: openArray[T]): seq[T] =
   result = newSeqOfCap[T](x.len)
