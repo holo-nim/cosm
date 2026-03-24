@@ -18,17 +18,24 @@ type
     of NameString: str*: string
     of NameSnakeCase: discard
     of NameConcat: concat*: seq[NamePattern]
-  FieldMapping* = object
-    ## mapping options for a type field
-    inputNames*: seq[NamePattern]
+  InputFieldMapping* = object
+    ## mapped values for input of a field
+    names*: seq[NamePattern]
       ## names that are accepted for this field when encountered in input
       ## if none are given, a default set of names can be used instead
-    ignoreInput*, ignoreOutput*: bool
-      ## whether or not to ignore a field when encountered in input or when generating output
-    outputName*: NamePattern
+    ignore*: bool
+      ## whether or not to ignore a field when encountered in input
+  OutputFieldMapping* = object
+    name*: NamePattern
       ## name for this field in output
-      ## if not given, a default name can be used instead
-    # maybe normalize case option
+      ## if not given or set to `NoName`, a default name can be used instead
+    ignore*: bool
+      ## whether or not to ignore a field when generating output
+  FieldMapping* = object
+    ## mapping options for a type field
+    input*: InputFieldMapping
+    output*: OutputFieldMapping
+    # maybe normalize case option - needs to be done for the type overall
   FieldMappingArg* = concept
     ## argument allowed for mapping pragma
     proc toFieldMapping(self: Self): FieldMapping
@@ -63,7 +70,7 @@ proc toFieldMapping*(options: FieldMapping): FieldMapping {.inline.} =
 proc toFieldMapping*(name: NamePattern): FieldMapping =
   ## hook called on the argument to the `mapping` pragma to convert it to a full field option object,
   ## for a name pattern this sets both the serialization and deserialization name of the field to it
-  FieldMapping(inputNames: @[name], outputName: name)
+  FieldMapping(input: InputFieldMapping(names: @[name]), output: OutputFieldMapping(name: name))
 
 proc toFieldMapping*(name: string): FieldMapping =
   ## hook called on the argument to the `mapping` pragma to convert it to a full field option object,
@@ -73,11 +80,11 @@ proc toFieldMapping*(name: string): FieldMapping =
 proc toFieldMapping*(enabled: bool): FieldMapping =
   ## hook called on the argument to the `mapping` pragma to convert it to a full field option object,
   ## for a bool this sets whether or not to enable serialization and deserialization for this field
-  FieldMapping(ignoreInput: not enabled, ignoreOutput: not enabled)
+  FieldMapping(input: InputFieldMapping(ignore: not enabled), output: OutputFieldMapping(ignore: not enabled))
 
 proc ignore*(): FieldMapping =
   ## creates a field option object that ignores this field in both serialization and deserialization
-  FieldMapping(ignoreInput: true, ignoreOutput: true)
+  FieldMapping(input: InputFieldMapping(ignore: true), output: OutputFieldMapping(ignore: true))
 
 proc apply*(pattern: NamePattern, name: string): string =
   ## applies a name pattern to a given name
@@ -96,24 +103,24 @@ proc apply*(pattern: NamePattern, name: string): string =
     for i in 1 ..< pattern.concat.len: result.add apply(pattern.concat[i], name)
 
 proc hasInputNames*(options: FieldMapping): bool =
-  options.inputNames.len != 0
+  options.input.names.len != 0
 
 proc getInputNames*(fieldName: string, options: FieldMapping, default: seq[NamePattern]): seq[string] =
   ## gives the names accepted for this field when encountered in input
   ## if none are given, this defaults to the patterns in `default`
   result = @[]
-  let names = if hasInputNames(options): options.inputNames else: default
+  let names = if hasInputNames(options): options.input.names else: default
   for pat in names:
     let name = apply(pat, fieldName)
     if name notin result: result.add name
 
 proc hasOutputName*(options: FieldMapping): bool =
-  options.outputName.kind != NoName
+  options.output.name.kind != NoName
 
 proc getOutputName*(fieldName: string, options: FieldMapping, default: NamePattern): string =
   ## gives the name for this field in output
   ## if not given, this defaults to the pattern in `default`
-  let name = if hasOutputName(options): options.outputName else: default
+  let name = if hasOutputName(options): options.output.name else: default
   result = apply(name, fieldName)
 
 type
@@ -292,7 +299,7 @@ macro mapFieldInput*[T: FieldedType](
   result = newNimNode(nnkCaseStmt, key)
   result.add key
   for fieldName, options in fields.items:
-    if not options.ignoreInput:
+    if not options.input.ignore:
       var branch = newTree(nnkOfBranch)
       let inputNames = getInputNames(fieldName, options, defaultInputs)
       for name in inputNames:
@@ -328,7 +335,7 @@ macro mapInputVariantFieldName*[T: VariantType](
   for variant in variants.variants:
     block variantField:
       let options = mappingTable.getOrDefault(variant.discrimName, FieldMapping())
-      if not options.ignoreInput:
+      if not options.input.ignore:
         var branch = newNimNode(nnkOfBranch, variantFieldTempl)
         let inputNames = getInputNames(variant.discrimName, options, defaultInputs)
         for name in inputNames:
@@ -337,7 +344,7 @@ macro mapInputVariantFieldName*[T: VariantType](
         result.add branch
     for fieldName, branchIndex in variant.fieldsToBranch:
       let options = mappingTable.getOrDefault(fieldName, FieldMapping())
-      if not options.ignoreInput:
+      if not options.input.ignore:
         var branch = newNimNode(nnkOfBranch, variantFieldTempl)
         let inputNames = getInputNames(fieldName, options, defaultInputs)
         for name in inputNames:
@@ -380,7 +387,7 @@ template mapFieldOutput*[T: FieldedType](
   const fieldTable = toTable fields
   for k, e in v.fieldPairs:
     const options = fieldTable.getOrDefault(k)
-    when not options.ignoreOutput:
+    when not options.output.ignore:
       const outputName = getOutputName(k, options, defaultOutput)
       templToCall(e, outputName)
 
@@ -437,7 +444,7 @@ macro mapEnumFieldInput*[T: enum](t: typedesc[T], s: string, mappings: static Fi
     let fieldName = $fieldSym
     let mapping = mappingTable.getOrDefault(fieldName, FieldMapping())
     if hasInputNames(mapping):
-      for inputName in mapping.inputNames:
+      for inputName in mapping.input.names:
         fieldStrNodes.add newLit apply(inputName, fieldName)
     elif fieldStrNodes.len == 0:
       fieldStrNodes = @[newLit fieldName]
@@ -498,7 +505,7 @@ macro mapEnumFieldOutput*[T: enum](t: typedesc[T], v: T, mappings: static FieldM
     let fieldName = $fieldSym
     let mapping = mappingTable.getOrDefault(fieldName, FieldMapping())
     if hasOutputName(mapping):
-      fieldStrNode = newLit apply(mapping.outputName, fieldName)
+      fieldStrNode = newLit apply(mapping.output.name, fieldName)
     elif fieldStrNode == nil or fieldStrNode.kind notin {nnkStrLit..nnkTripleStrLit}:
       fieldStrNode = newLit fieldName
     result.add newTree(nnkOfBranch,
