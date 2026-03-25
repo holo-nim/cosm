@@ -7,10 +7,13 @@ proc toSnakeCase*(s: string): string =
   var prevCap = false
   for i, c in s:
     if c in {'A'..'Z'}:
-      if result.len > 0 and result[result.len-1] != '_' and not prevCap:
-        result.add '_'
+      if i == 0:
+        result.add c
+      else:
+        if result[result.len-1] != '_' and not prevCap:
+          result.add '_'
+        result.add c.toLowerAscii()
       prevCap = true
-      result.add c.toLowerAscii()
     else:
       prevCap = false
       result.add c
