@@ -1,4 +1,27 @@
-import ./field_options, std/[macros, tables]
+import ./[field_groups, field_options], std/[macros, tables]
+
+proc getDefaultFieldMappings*[T: FieldedType](obj: typedesc[T], group: typedesc): FieldMappingPairs #[{.compileTime.}]# =
+  ## builds the field mappings filtered for `group` only going off of type field pragmas
+  ## and without checking hooks
+  result = @(buildFieldMappingPairs(obj, group, toFieldMapping, FieldMapping()))
+
+template derefType[T](_: typedesc[ref T]): typedesc[T] = T
+
+template getActualFieldMappings*[T](obj: typedesc[T], group: typedesc): FieldMappingPairs =
+  ## considers the `getFieldMappings` hook, using the field pragmas if it doesn't exist
+  mixin getFieldMappings
+  when T is HasFieldMappings:
+    getFieldMappings(T, group)
+  elif T is ref:
+    when derefType(T) is HasFieldMappings:
+      getFieldMappings(derefType(T), group)
+    else:
+      getDefaultFieldMappings(T, group)
+  else:
+    when (ref T) is HasFieldMappings:
+      getFieldMappings(ref T, group)
+    else:
+      getDefaultFieldMappings(T, group)
 
 proc toUnique[T](x: openArray[T]): seq[T] =
   result = newSeqOfCap[T](x.len)
@@ -19,7 +42,7 @@ macro wrapNormalizerMacro(normalizer: typed, n: untyped): untyped =
   result = wrapNormalizer(normalizer, n)
 
 proc addInputNamesToBranch(branch: NimNode, fieldName: string, options: FieldMapping, normalizer: NimNode, defaultInputs: seq[NamePattern]) =
-  let inputNames = getInputNames(fieldName, options, defaultInputs)
+  let inputNames = getInputNames(fieldName, options.name, defaultInputs)
   if isNilAst(normalizer):
     for name in inputNames:
       branch.add newLit(name)
@@ -44,7 +67,7 @@ macro mapFieldInput*[T: FieldedType](
   result = newNimNode(nnkCaseStmt, key)
   result.add wrapNormalizer(normalizer, key)
   for fieldName, options in fields.items:
-    if not options.input.ignore:
+    if not options.ignore.input:
       var branch = newTree(nnkOfBranch)
       addInputNamesToBranch(branch, fieldName, options, normalizer, defaultInputs)
       branch.add newCall(templToCall, newDotExpr(copy v, ident fieldName))
@@ -81,14 +104,14 @@ macro mapInputVariantFieldName*[T: VariantType](
   for variant in variants.variants:
     block variantField:
       let options = mappingTable.getOrDefault(variant.discrimName, FieldMapping())
-      if not options.input.ignore:
+      if not options.ignore.input:
         var branch = newNimNode(nnkOfBranch, variantFieldTempl)
         addInputNamesToBranch(branch, variant.discrimName, options, normalizer, defaultInputs)
         branch.add newCall(variantFieldTempl, ident variant.discrimName)
         result.add branch
     for fieldName, branchIndex in variant.fieldsToBranch:
       let options = mappingTable.getOrDefault(fieldName, FieldMapping())
-      if not options.input.ignore:
+      if not options.ignore.input:
         var branch = newNimNode(nnkOfBranch, variantFieldTempl)
         addInputNamesToBranch(branch, fieldName, options, normalizer, defaultInputs)
         let discrimValue = firstValue(variant.branches[branchIndex])
@@ -135,8 +158,8 @@ template mapFieldOutput*[T: FieldedType](
   const fieldTable = toTable fields
   for k, e in fieldPairs(when T is ref: v[] else: v):
     const options = fieldTable.getOrDefault(k)
-    when not options.output.ignore:
-      const outputName = wrapNormalizerMacro(normalizer, getOutputName(k, options, defaultOutput))
+    when not options.ignore.output:
+      const outputName = wrapNormalizerMacro(normalizer, getOutputName(k, options.name, defaultOutput))
       templToCall(e, outputName)
 
 macro mapEnumFieldInput*[T: enum](
@@ -197,8 +220,8 @@ macro mapEnumFieldInput*[T: enum](
     else: error("Invalid node for enum type `" & $f.kind & "`!", f)
     let fieldName = $fieldSym
     let mapping = mappingTable.getOrDefault(fieldName, FieldMapping())
-    if hasInputNames(mapping):
-      for inputName in mapping.input.names:
+    if hasInputNames(mapping.name):
+      for inputName in mapping.name.inputs:
         fieldStrNodes.add newLit apply(inputName, fieldName)
     elif fieldStrNodes.len == 0:
       fieldStrNodes = @[newLit fieldName]
@@ -271,8 +294,8 @@ macro mapEnumFieldOutput*[T: enum](
     else: error("Invalid node for enum type `" & $f.kind & "`!", f)
     let fieldName = $fieldSym
     let mapping = mappingTable.getOrDefault(fieldName, FieldMapping())
-    if hasOutputName(mapping):
-      fieldStrNode = newLit apply(mapping.output.name, fieldName)
+    if hasOutputName(mapping.name):
+      fieldStrNode = newLit apply(mapping.name.output, fieldName)
     elif fieldStrNode == nil or fieldStrNode.kind notin {nnkStrLit..nnkTripleStrLit}:
       fieldStrNode = newLit fieldName
     fieldStrNode = wrapNormalizer(normalizer, fieldStrNode)

@@ -1,53 +1,43 @@
-import std/macros
+## basic definitions for group types
+## 
+## to define a new group type, it is enough to do `type GroupType = object`
+## and fill in the relevant overloads, but this design might not be permanent
 
-type MappingGroup* = object
-  ## info to describe specific formats at compile time
-  id*: string
-    ## string identifier for the format
-    ## empty allows everything
-  mimeType*: string
-  parents*: seq[MappingGroup]
-    ## groups that this group is a "subset" of, does not need an effective meaning other than for filters
-    ## in the future might be replaced with imperative declarations (i.e. `declareSubset(HoloJson, Json)`)
-    ## but this might require using `macrocache` or other unstable nim features
+type AnyMapping* = object
+  ## stand-in for any mapping type
 
-const AnyMappingGroup* = MappingGroup(id: "")
-  ## matches any mapping group without having to be declared as parent
+template mapping*(options: typed) {.pragma.}
+  ## sets the mapping options for a field for any mapping group
+  ##
+  ## option can be of any type, which is then interpreted by mapping macros
+  ## by wrapping it in a hook i.e. `toFieldMapping`, see the `field_options`
+  ## module for the default interpretation
+  ## 
+  ## irrelevant options should be ignored by hooks for orthogonality,
+  ## i.e. a mapping that does not use field names should treat just a name mapping
+  ## as if no option was given 
 
-proc `<=`*(a, b: MappingGroup): bool =
-  ## returns true if `a` is a subset of `b`
-  if b.id == AnyMappingGroup.id:
+template mapping*[T](group: typedesc[T], options: typed) {.pragma.}
+  ## mapping pragma but filtered to the given mapping group,
+  ## filters with the least inheritance depth or earliest order are preferred
+
+template eachParent*[T](group: typedesc[T], toApply: untyped) =
+  ## passes each parent type of `group` is as a call argument to `toApply`
+  ## 
+  ## needs to be overloaded to define group parents, 
+  ## by default assumes no parent types and does nothing
+  # toApply(AnyMapping)
+  discard
+
+proc isSubmapping*(A, B: typedesc): bool #[{.compileTime.}]# =
+  ## infers if `B` is some parent of `A` depending on `eachParent`
+  when B is AnyMapping:
     result = true
-  elif a.id == b.id:
+  elif A is B:
     result = true
   else:
+    mixin eachParent
     result = false
-    for ap in a.parents:
-      if ap <= b:
-        return true
-
-proc getMappingGroupFromLiteral*(obj: NimNode): MappingGroup =
-  expectKind obj, nnkObjConstr
-  result = MappingGroup()
-  for i in 1 ..< obj.len:
-    expectKind obj[i], nnkExprColonExpr
-    let fieldName = $obj[i][0]
-    let val = obj[i][1]
-    case fieldName
-    of "id":
-      expectKind val, {nnkStrLit..nnkTripleStrLit}
-      result.id = val.strVal
-    of "mimeType":
-      expectKind val, {nnkStrLit..nnkTripleStrLit}
-      result.mimeType = val.strVal
-    of "parents":
-      expectKind val, nnkBracket
-      result.parents.newSeq(val.len)
-      for i in 0 ..< val.len:
-        result.parents[i] = getMappingGroupFromLiteral(val[i])
-    else:
-      warning("unknown field in mapping group literal: " & fieldName, obj[i])
-
-# common formats, won't be needed if imperative declarations are implemented
-const Binary* = MappingGroup(id: "binary", mimeType: "application/octet-stream", parents: @[])
-const Json* = MappingGroup(id: "json", mimeType: "application/json", parents: @[])
+    template checkParent(parent) {.used.} =
+      if isSubmapping(parent, B): return true
+    eachParent(A, checkParent)
