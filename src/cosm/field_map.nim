@@ -1,4 +1,24 @@
-import ./mapping, std/[macros, tables]
+import ./[field_groups, field_options], std/[macros, tables]
+
+proc getDefaultFieldMappings*[T: FieldedType](obj: typedesc[T], group: typedesc): FieldMappingPairs #[{.compileTime.}]# =
+  result = @(buildFieldMappingPairs(obj, group, toFieldMapping, FieldMapping()))
+
+template derefType[T](_: typedesc[ref T]): typedesc[T] = T
+
+template getActualFieldMappings*[T](obj: typedesc[T], group: typedesc): FieldMappingPairs =
+  mixin getFieldMappings
+  when T is HasFieldMappings:
+    getFieldMappings(T, group)
+  elif T is ref:
+    when derefType(T) is HasFieldMappings:
+      getFieldMappings(derefType(T), group)
+    else:
+      getDefaultFieldMappings(T, group)
+  else:
+    when (ref T) is HasFieldMappings:
+      getFieldMappings(ref T, group)
+    else:
+      getDefaultFieldMappings(T, group)
 
 proc toUnique[T](x: openArray[T]): seq[T] =
   result = newSeqOfCap[T](x.len)

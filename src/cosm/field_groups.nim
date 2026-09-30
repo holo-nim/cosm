@@ -1,8 +1,4 @@
-import ./[groups, field_options], std/macros, private/macroutils
-
-type HasFieldMappings* = concept
-  ## implement to override mappings for a type
-  proc getFieldMappings(obj: typedesc[Self], group: static MappingGroup): FieldMappingPairs
+import ./groups, std/macros, private/macroutils
 
 proc iterFieldNames(names: var seq[(string, NimNode)], list: NimNode) =
   case list.kind
@@ -47,7 +43,58 @@ proc matchCustomPragma(sym: NimNode): bool =
     let impl = getImpl(sym)
     result = impl != nil and impl.kind == nnkTemplateDef
 
-proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
+proc stripTypeNode(t: NimNode): NimNode =
+  if t.isNil: return t
+  result = getTypeInst(t)
+  while true:
+    if result.kind in {nnkRefTy, nnkPtrTy, nnkVarTy, nnkOutTy}:
+      if result[^1].kind == nnkObjectTy:
+        result = result[^1]
+      else:
+        result = getTypeInst(result[^1])
+    elif result.kind == nnkBracketExpr and result[0].eqIdent"typeDesc":
+      result = getTypeInst(result[1])
+    elif result.kind == nnkBracketExpr and result[0].kind == nnkSym:
+      break
+    elif result.kind == nnkSym:
+      break
+    else:
+      break
+
+proc matchTypeNodesStripped(a, b: NimNode): bool =
+  if a.isNil or b.isNil:
+    result = a.isNil and b.isNil
+  else:
+    result = sameType(a, b)
+
+type
+  FieldMappingFilter* = object
+    group*: NimNode
+    parents*: seq[FieldMappingFilter]
+
+proc prestrip(filter: FieldMappingFilter): FieldMappingFilter =
+  result = FieldMappingFilter()
+  result.group = stripTypeNode(filter.group)
+  for parent in filter.parents:
+    result.parents.add prestrip(parent) 
+
+proc matchPrestripped(filter: FieldMappingFilter, group: NimNode): int =
+  ## returns depth, -1 if no match
+  if matchTypeNodesStripped(filter.group, group):
+    result = 0
+  else:
+    result = -1
+    for p in filter.parents:
+      let parentMatch = p.matchPrestripped(group)
+      if parentMatch >= 0:
+        let branch = parentMatch + 1
+        if result < 0 or branch < result:
+          result = branch
+          if result == 1:
+            return
+
+iterator fieldMappingNodes(obj: NimNode, filter: FieldMappingFilter): tuple[field: string, mapping: NimNode] =
+  ## looks for mapping pragmas of the fields of `obj` matching the group filter
   var names: seq[(string, NimNode)] = @[]
   var t = obj
   var supportsCustomPragma = false
@@ -85,66 +132,60 @@ proc buildFieldMappingPairs*(obj: NimNode, group: MappingGroup): NimNode =
         t = impl[1][0]
     else:
       error "got unknown object type kind " & $impl.kind, impl
-  result = newNimNode(nnkBracket, obj)
+  let prestripped = prestrip(filter)
   for name, prag in names.items:
     var val: NimNode = nil
-    var lastFilter = AnyMappingGroup
+    var lastDepth = -1
     if prag != nil and supportsCustomPragma:
       # again copied from macros.customPragma
       for p in prag:
         if p.kind in nnkPragmaCallKinds and p.len > 0 and p[0].kind == nnkSym and matchCustomPragma(p[0]):
           let def = p[0].getImpl[3]
-          let arg = if def.len == 3: p[2] else: p[1] 
-          let filter = if def.len == 3: getMappingGroupFromLiteral(p[1]) else: AnyMappingGroup
-          if group <= filter and filter <= lastFilter:
+          let arg = if def.len == 3: p[2] else: p[1]
+          let group = if def.len == 3: p[1] else: nil
+          let depth =
+            if group.isNil:
+              if prestripped.group.isNil: 0
+              else: high(int)
+            else: matchPrestripped(prestripped, stripTypeNode(group))
+          if depth >= 0 and (lastDepth < 0 or depth < lastDepth):
             val = arg
-            lastFilter = filter
-          when false:
-            if p.len == 2 or
-                # ??? generics support?
-                (p.len == 3 and p[1].kind == nnkSym and p[1].symKind == nskType):
-              val = p[1]
-            else:
-              let def = p[0].getImpl[3]
-              val = newTree(nnkPar)
-              for i in 1 ..< def.len:
-                let key = def[i][0]
-                let val = p[i]
-                val.add newTree(nnkExprColonExpr, key, val)
-    if val == nil:
-      val = quote do: FieldMapping()
-    else:
-      val = quote do: toFieldMapping(`val`)
+            lastDepth = depth
+            if depth == 0:
+              break
+    yield (name, val)
+
+proc buildFieldMappingPairsNode(obj: NimNode, filter: FieldMappingFilter, callWrap: NimNode, missing: NimNode): NimNode =
+  ## from `fieldMappingNodes`, builds an array literal of tuples of
+  ## 1. the field name string,
+  ## 2. the mapping node wrapped in a call to `callWrap` if mapping exists, otherwise the node `missing`
+  result = newNimNode(nnkBracket, obj)
+  for fieldName, mappingNode in fieldMappingNodes(obj, filter):
     result.add(newTree(nnkTupleConstr,
-      newLit(name),
-      val))
-    when false:
-      let ident = ident(name)
-      if isTuple:
-        quote do:
-          FieldMapping()
-      else:
-        quote do:
-          when hasCustomPragma(`obj`.`ident`, `pragmaSym`):
-            toFieldMapping(getCustomPragmaVal(`obj`.`ident`, `pragmaSym`))
-          else:
-            FieldMapping()
-  result = newCall(bindSym"@", result)
+      newLit(fieldName),
+      if mappingNode.isNil: missing else: newCall(callWrap, mappingNode)))
 
-macro getDefaultFieldMappings*[T: FieldedType](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
-  result = buildFieldMappingPairs(obj, group)
-
-template getActualFieldMappings*[T: HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
-  mixin getFieldMappings
-  getFieldMappings(T, group)
-
-template getActualFieldMappings*[U: HasFieldMappings, T: (ref U) and not HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
-  mixin getFieldMappings
-  getFieldMappings(U, group)
-
-template getActualFieldMappings*[T: FieldedType and not HasFieldMappings](obj: typedesc[T], group: static MappingGroup = AnyMappingGroup): FieldMappingPairs =
-  when T isnot ref and (ref T) is HasFieldMappings:
-    mixin getFieldMappings
-    getFieldMappings(ref T, group)
+proc groupFilterNode(group: typedesc): FieldMappingFilter =
+  when group is AnyMapping:
+    result = FieldMappingFilter(group: nil, parents: @[])
   else:
-    getDefaultFieldMappings(T, group)
+    mixin eachParent
+    result = FieldMappingFilter(group: getTypeInst(group), parents: @[])
+    template addParent(parent: untyped) {.used.} =
+      result.parents.add groupFilterNode(parent)
+    eachParent(group, addParent)
+
+type FieldedType* = (object | ref object | tuple)
+  # XXX also maybe enum
+
+template buildFieldMappingPairs*[T: FieldedType](obj: typedesc[T], group: typedesc, callWrap: untyped, missing: untyped): untyped =
+  ## looks for mapping pragmas of the fields of `obj` for `group`,
+  ## where `group = AnyMapping` represents no filter
+  ## 
+  ## then returns an array literal of tuples of
+  ## 1. the field name string,
+  ## 2. the mapping node wrapped in a call to `callWrap` if mapping provided, otherwise the node `missing`
+  macro intermediate(obj2, callWrap2, missing2: untyped): untyped =
+    let filter = groupFilterNode(group)
+    result = buildFieldMappingPairsNode(obj2, filter, callWrap2, missing2)
+  intermediate(obj, callWrap, missing)

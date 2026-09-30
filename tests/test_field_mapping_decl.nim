@@ -1,4 +1,4 @@
-import cosm/mapping
+import cosm, cosm/[common_groups, field_map]
 
 type HoloJson* = object
 template eachParent*(group: typedesc[HoloJson], toApply: untyped) =
