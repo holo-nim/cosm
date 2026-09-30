@@ -1,3 +1,5 @@
+## a flexible way to extract field options from type field pragmas
+
 import ./groups, std/macros, private/macroutils
 
 proc iterFieldNames(names: var seq[(string, NimNode)], list: NimNode) =

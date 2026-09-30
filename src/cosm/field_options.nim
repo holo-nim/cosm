@@ -1,3 +1,5 @@
+## default interpretation for field mapping options
+
 import ./caseutils
 
 type
@@ -61,6 +63,31 @@ proc apply*(pattern: NamePattern, name: string): string =
     result = apply(pattern.concat[0], name)
     for i in 1 ..< pattern.concat.len: result.add apply(pattern.concat[i], name)
 
+proc hasInputNames*(options: NameMapping): bool =
+  options.inputs.len != 0
+
+proc getInputNames*(fieldName: string, options: NameMapping, default: seq[NamePattern]): seq[string] =
+  ## gives the names accepted for this field when encountered in input
+  ## if none are given, this defaults to the patterns in `default`
+  result = @[]
+  let names = if hasInputNames(options): options.inputs else: default
+  for pat in names:
+    let name = apply(pat, fieldName)
+    if name notin result: result.add name
+
+proc hasOutputName*(options: NameMapping): bool =
+  options.output.kind != NoName
+
+proc getOutputName*(fieldName: string, options: NameMapping, default: NamePattern): string =
+  ## gives the name for this field in output
+  ## if not given, this defaults to the pattern in `default`
+  let name = if hasOutputName(options): options.output else: default
+  result = apply(name, fieldName)
+
+proc ignore*(): IgnoreMapping =
+  ## creates a field option object that ignores this field in both serialization and deserialization
+  IgnoreMapping(input: true, output: true)
+
 proc toNameMapping*(options: NameMapping): NameMapping = options
 proc toNameMapping*(name: NamePattern): NameMapping =
   ## hook called on the argument to the `mapping` pragma to convert it to a full field option object,
@@ -71,13 +98,17 @@ proc toNameMapping*(name: string): NameMapping =
   ## for a string this sets both the serialization and deserialization name of the field to it
   toNameMapping(toName(name))
 
-proc ignore*(): IgnoreMapping =
-  ## creates a field option object that ignores this field in both serialization and deserialization
-  IgnoreMapping(input: true, output: true)
-
 proc toIgnoreMapping*(options: IgnoreMapping): IgnoreMapping = options
 proc toIgnoreMapping*(enabled: bool): IgnoreMapping =
   IgnoreMapping(input: not enabled, output: not enabled)
+
+proc toNameMapping*(ignoreOptions: bool | IgnoreMapping): NameMapping =
+  ## hook to allow for orthogonality with `IgnoreMapping` options, just gives a default name mapping
+  NameMapping()
+
+proc toIgnoreMapping*(nameOptions: string | NamePattern | NameMapping): IgnoreMapping =
+  ## hook to allow for orthogonality with `NameMapping` options, just gives a default ignore mapping
+  IgnoreMapping()
 
 proc toFieldMapping*(options: FieldMapping): FieldMapping = options
 
@@ -102,26 +133,13 @@ proc toFieldMapping*(enabled: bool): FieldMapping =
   ## for a bool this sets whether or not to enable serialization and deserialization for this field
   toFieldMapping(toIgnoreMapping(enabled))
 
-proc hasInputNames*(options: NameMapping): bool =
-  options.inputs.len != 0
+proc toNameMapping*(fullOptions: FieldMapping): NameMapping =
+  ## hook to allow for narrowing from `FieldMapping`
+  fullOptions.name
 
-proc getInputNames*(fieldName: string, options: NameMapping, default: seq[NamePattern]): seq[string] =
-  ## gives the names accepted for this field when encountered in input
-  ## if none are given, this defaults to the patterns in `default`
-  result = @[]
-  let names = if hasInputNames(options): options.inputs else: default
-  for pat in names:
-    let name = apply(pat, fieldName)
-    if name notin result: result.add name
-
-proc hasOutputName*(options: NameMapping): bool =
-  options.output.kind != NoName
-
-proc getOutputName*(fieldName: string, options: NameMapping, default: NamePattern): string =
-  ## gives the name for this field in output
-  ## if not given, this defaults to the pattern in `default`
-  let name = if hasOutputName(options): options.output else: default
-  result = apply(name, fieldName)
+proc toIgnoreMapping*(fullOptions: FieldMapping): IgnoreMapping =
+  ## hook to allow for narrowing from `FieldMapping`
+  fullOptions.ignore
 
 type
   FieldMappingPairs* = seq[(string, FieldMapping)]

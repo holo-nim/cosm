@@ -1,11 +1,14 @@
 import ./[field_groups, field_options], std/[macros, tables]
 
 proc getDefaultFieldMappings*[T: FieldedType](obj: typedesc[T], group: typedesc): FieldMappingPairs #[{.compileTime.}]# =
+  ## builds the field mappings filtered for `group` only going off of type field pragmas
+  ## and without checking hooks
   result = @(buildFieldMappingPairs(obj, group, toFieldMapping, FieldMapping()))
 
 template derefType[T](_: typedesc[ref T]): typedesc[T] = T
 
 template getActualFieldMappings*[T](obj: typedesc[T], group: typedesc): FieldMappingPairs =
+  ## considers the `getFieldMappings` hook, using the field pragmas if it doesn't exist
   mixin getFieldMappings
   when T is HasFieldMappings:
     getFieldMappings(T, group)
