@@ -1,4 +1,4 @@
 ## utilities for mapping fields of types
 
-import field_options, field_map, field_groups
-export field_options, field_map, field_groups
+import mapping, field_map #, field_options, field_groups
+export mapping, field_map #, field_options, field_groups

@@ -1,6 +1,5 @@
 import cosm/mapping
 
-type Json* = object
 type HoloJson* = object
 template eachParent*(group: typedesc[HoloJson], toApply: untyped) =
   toApply Json
